@@ -1,0 +1,8 @@
+﻿## Interface: 50400
+## Title: Dominos Group Fade
+## Author: Choonster
+## Version: @project-version@
+## Notes: Fades Dominos bars in and out based on macro conditionals.
+## Dependencies: Dominos
+
+core.lua
