@@ -35,11 +35,36 @@ local FADE_DELAY = 0.4
 -- List globals here for Mikk's FindGlobals script
 -- GLOBALS: InCombatLockdown
 
-local pairs = pairs
+local ipairs, pairs = ipairs, pairs
 local Dominos_Frame = Dominos.Frame
 
 local FramesToHide = {}
 local FramesToShow = {}
+
+-- Returns a match when a conditional string uses `fadein` with the [combat] conditional
+local CombatFadeInPattern = "[%[,]combat[%],]%[?[^;]*%]?fadein"
+
+-- Sets that need to fade in in combat
+local NumCombatFadeInSets = 0
+local CombatFadeInSets = {}
+
+------
+-- Set methods
+------
+local function Set_ShowAll(self)
+	for groupID = 1, #self do
+		self[groupID]:ShowAll()
+	end
+end
+
+------
+-- Group methods
+------
+local function Group_ShowAll(self)
+	for i = 1, #self do
+		Dominos_Frame:Get(self[i]):ShowFrame()
+	end
+end
 
 ------
 -- Group scripts
@@ -108,8 +133,21 @@ local TimekeeperParent = CreateFrame("Frame", nil, nil, "SecureHandlerAttributeT
 local FadeInTimekeepers = {}
 local FadeOutTimekeepers = {}
 
+TimekeeperParent:RegisterEvent("PLAYER_REGEN_DISABLED")
 TimekeeperParent:RegisterEvent("PLAYER_REGEN_ENABLED")
 TimekeeperParent:SetScript("OnEvent", function(self, event, ...)
+	self[event](self, ...)
+end)
+
+-- Pre-show all frames that need to fade in in combat just before it starts
+function TimekeeperParent:PLAYER_REGEN_DISABLED()
+	for i = 1, NumCombatFadeInSets do
+		CombatFadeInSets[i]:ShowAll()
+	end
+end
+
+-- When combat ends, show/hide any frames that were meant to show/hide during combat
+function TimekeeperParent:PLAYER_REGEN_ENABLED()
 	for frame, _ in pairs(FramesToShow) do
 		frame:ShowFrame()
 		FramesToShow[frame] = nil
@@ -119,10 +157,12 @@ TimekeeperParent:SetScript("OnEvent", function(self, event, ...)
 		frame:HideFrame()
 		FramesToHide[frame] = nil
 	end
-end)
+end
 
 for setName, set in pairs(FRAME_SETS) do
 	setName = setName:upper()
+	
+	set.ShowAll = Set_ShowAll
 	
 	local FadeInTimekeeper = TimekeeperParent:CreateAnimationGroup()
 	FadeInTimekeeper.animations = {}
@@ -133,9 +173,16 @@ for setName, set in pairs(FRAME_SETS) do
 	FadeOutTimekeepers[setName] = FadeOutTimekeeper
 
 	RegisterAttributeDriver(TimekeeperParent, setName, set.conditional)
+	
+	if set.conditional:find(CombatFadeInPattern) then
+		NumCombatFadeInSets = NumCombatFadeInSets + 1
+		CombatFadeInSets[NumCombatFadeInSets] = set
+	end
 
 	local numGroups = #set
 	for groupID, group in ipairs(set) do
+		group.ShowAll = Group_ShowAll
+		
 		FadeInTimekeeper.animations[groupID] = CreateGroupFader(FadeInTimekeeper, groupID, group, GroupFadeIn_OnPlay)
 		
 		-- Add 1 to the order argument so it's in the range [1,numGroups] instead of [0,numGroups-1]
