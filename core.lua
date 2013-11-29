@@ -143,9 +143,10 @@ for setName, set in pairs(FRAME_SETS) do
 	end
 end
 
-hooksecurefunc(Dominos_Frame, "Create", function(self, id)
+hooksecurefunc(Dominos_Frame, "New", function(self, id)
 	local frame = Dominos_Frame:Get(id)
-	
-	frame.fadeIn = CreateFrameFader(frame, 1, "OnPlay", FrameFadeIn_OnPlay)
-	frame.fadeOut = CreateFrameFader(frame, -1, "OnFinished", FrameFadeOut_OnFinished)
+	if not frame.fadeIn and not frame.fadeOut then
+		frame.fadeIn = CreateFrameFader(frame, 1, "OnPlay", FrameFadeIn_OnPlay)
+		frame.fadeOut = CreateFrameFader(frame, -1, "OnFinished", FrameFadeOut_OnFinished)
+	end
 end)
