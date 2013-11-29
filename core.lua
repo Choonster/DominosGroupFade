@@ -6,7 +6,7 @@ Format:
 		{3, 7, 6},   -- Group 2
 		{5, 10, 11}, -- Group 3
 	},
-	
+
 Each set (which must have a unique case-insensitive name) consists of one or more groups of frame numbers and a string describing the conditions under which the frames in the set should fade in and out.
 The first group in a set will fade in first and fade out last. The last group in a set will fade in last and fade out first.
 The frames in each group will fade in and out simultaneously.
@@ -72,15 +72,44 @@ end
 local function GroupFadeIn_OnPlay(self)
 	local group = self.group
 	for i = 1, #group do
-		Dominos_Frame:Get(group[i]).fadeIn:Play()
+		local frame = Dominos_Frame:Get(group[i])
+		if frame then
+			frame:FadeIn(true)
+		end
 	end
 end
 
 local function GroupFadeOut_OnPlay(self)
 	local group = self.group
 	for i = 1, #group do
-		Dominos_Frame:Get(group[i]).fadeOut:Play()
+		local frame = Dominos_Frame:Get(group[i])
+		if frame then
+			frame:FadeOut()
+		end
 	end
+end
+
+------
+-- Frame methods
+------
+local function Frame_Fade(self)
+	if self.fadeConditional then return end
+	
+	if self.focused then
+		self:FadeIn(false)
+	else
+		self:FadeOut()
+	end
+end
+
+local function Frame_FadeIn(self, fadeConditional)
+	self.fadeConditional = fadeConditional
+	self.fadeIn:Play()
+end
+
+local function Frame_FadeOut(self)
+	self.fadeConditional = false
+	self.fadeOut:Play()
 end
 
 ------
@@ -88,24 +117,25 @@ end
 ------
 local function FrameFadeIn_OnPlay(self)
 	local frame = self:GetParent()
-	if InCombatLockdown() then
-		FramesToShow[frame] = true
-	else
-		FramesToHide[frame] = nil
+	if not InCombatLockdown and not frame:FrameIsShown() then
 		frame:ShowFrame()
 	end
+end
+
+local function FrameFadeIn_OnFinished(self)
+	self:GetParent():SetAlpha(1)
 end
 
 local function FrameFadeOut_OnFinished(self)
 	local frame = self:GetParent()
 	frame:SetAlpha(0)
-	
-	if InCombatLockdown() then
-		FramesToHide[frame] = true
-	else
-		FramesToShow[frame] = nil
-		frame:HideFrame()
-	end
+
+	-- if InCombatLockdown() then
+		-- FramesToHide[frame] = true
+	-- else
+		-- FramesToShow[frame] = nil
+		-- frame:HideFrame()
+	-- end
 end
 
 ------
@@ -120,18 +150,34 @@ local function CreateGroupFader(timekeeper, order, group, onPlayFunc)
 	return fader
 end
 
-local function CreateFrameFader(frame, change, scriptName, scriptFunc)
+local function CreateFrameFader(frame, change, onPlayFunc, onFinishedFunc)
 	local animGroup = frame:CreateAnimationGroup()
 	animGroup.animation = animGroup:CreateAnimation("Alpha")
 	animGroup.animation:SetDuration(FADE_DURATION)
 	animGroup.animation:SetChange(change)
-	animGroup.animation:SetScript(scriptName, scriptFunc)
+	animGroup:SetScript("OnPlay", onPlayFunc)
+	animGroup:SetScript("OnFinished", onFinishedFunc)
 	return animGroup
 end
 
-local TimekeeperParent = CreateFrame("Frame", nil, nil, "SecureHandlerAttributeTemplate")
+local TimekeeperParent = CreateFrame("Frame")
 local FadeInTimekeepers = {}
 local FadeOutTimekeepers = {}
+
+TimekeeperParent:SetScript("OnAttributeChanged", function(self, name, value)
+	print("OAC", self, name, value)
+	if value == "fadein" then
+		FadeInTimekeepers[name]:Play()
+	elseif value == "fadeout" then
+		FadeOutTimekeepers[name]:Play()
+	end
+end)
+
+function TimekeeperParent:ForceUpdate()
+	for setName, set in pairs(FRAME_SETS) do
+		self:SetAttribute(setName:lower(), SecureCmdOptionParse(set.conditional))
+	end
+end
 
 TimekeeperParent:RegisterEvent("PLAYER_REGEN_DISABLED")
 TimekeeperParent:RegisterEvent("PLAYER_REGEN_ENABLED")
@@ -152,7 +198,7 @@ function TimekeeperParent:PLAYER_REGEN_ENABLED()
 		frame:ShowFrame()
 		FramesToShow[frame] = nil
 	end
-	
+
 	for frame, _ in pairs(FramesToHide) do
 		frame:HideFrame()
 		FramesToHide[frame] = nil
@@ -160,20 +206,20 @@ function TimekeeperParent:PLAYER_REGEN_ENABLED()
 end
 
 for setName, set in pairs(FRAME_SETS) do
-	setName = setName:upper()
-	
+	setName = setName:lower()
+
 	set.ShowAll = Set_ShowAll
-	
+
 	local FadeInTimekeeper = TimekeeperParent:CreateAnimationGroup()
 	FadeInTimekeeper.animations = {}
 	FadeInTimekeepers[setName] = FadeInTimekeeper
-	
+
 	local FadeOutTimekeeper = TimekeeperParent:CreateAnimationGroup()
 	FadeOutTimekeeper.animations = {}
 	FadeOutTimekeepers[setName] = FadeOutTimekeeper
 
 	RegisterAttributeDriver(TimekeeperParent, setName, set.conditional)
-	
+
 	if set.conditional:find(CombatFadeInPattern) then
 		NumCombatFadeInSets = NumCombatFadeInSets + 1
 		CombatFadeInSets[NumCombatFadeInSets] = set
@@ -182,9 +228,9 @@ for setName, set in pairs(FRAME_SETS) do
 	local numGroups = #set
 	for groupID, group in ipairs(set) do
 		group.ShowAll = Group_ShowAll
-		
+
 		FadeInTimekeeper.animations[groupID] = CreateGroupFader(FadeInTimekeeper, groupID, group, GroupFadeIn_OnPlay)
-		
+
 		-- Add 1 to the order argument so it's in the range [1,numGroups] instead of [0,numGroups-1]
 		FadeOutTimekeeper.animations[groupID] = CreateGroupFader(FadeOutTimekeeper, numGroups - groupID + 1, group, GroupFadeOut_OnPlay)
 	end
@@ -192,8 +238,15 @@ end
 
 hooksecurefunc(Dominos_Frame, "New", function(self, id)
 	local frame = Dominos_Frame:Get(id)
-	if not frame.fadeIn and not frame.fadeOut then
-		frame.fadeIn = CreateFrameFader(frame, 1, "OnPlay", FrameFadeIn_OnPlay)
-		frame.fadeOut = CreateFrameFader(frame, -1, "OnFinished", FrameFadeOut_OnFinished)
+	if not frame.hasFadeInOut then
+		frame.hasFadeInOut = true
+		frame.fadeIn = CreateFrameFader(frame, 1, FrameFadeIn_OnPlay, FrameFadeIn_OnFinished)
+		frame.fadeOut = CreateFrameFader(frame, -1, nil, FrameFadeOut_OnFinished)
+		
+		frame.Fade = Frame_Fade
+		frame.FadeIn = Frame_FadeIn
+		frame.FadeOut = Frame_FadeOut
 	end
+
+	TimekeeperParent:ForceUpdate()
 end)
