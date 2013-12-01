@@ -14,11 +14,12 @@ The frames in each group will fade in and out simultaneously.
 
 local FRAME_SETS = {
     ["SETONE"] = {
-		conditional = "[combat]fadein;fadeout",
-		{7, 15, 19},
-		{4, 5, 6, 8, 9, 10},
-		{2, 3, 11, 12, 14, 16, 17, 18},
-		{1, 13},
+		conditional = "[mod:lshift,mod:lalt][@target,nodead,harm]fadein;fadeout",
+		{7},
+		{5, 6, 8, 9, 15, 19, 24},
+		{4, 10, 14, 16, 17, 18, 23, 25},
+		{2, 3, 11, 12, 21, 22, 26, 27},
+		{1, 13, 20, 28},
 	},
 }
 
@@ -26,55 +27,44 @@ local FRAME_SETS = {
 local FADE_DURATION = 0.5
 
 -- The delay in seconds between the start of each group's fade animation
-local FADE_DELAY = 0.4
+local FADE_DELAY = 0.5
 
 -------------------
 -- END OF CONFIG --
 -------------------
 
 -- List globals here for Mikk's FindGlobals script
--- GLOBALS: InCombatLockdown
+-- GLOBALS: InCombatLockdown, SecureCmdOptionParse
+
+local printargs = {}
+local function PRINT(self, format, ...)
+	if self.id == 1 or self.id == 24 then
+		local numArgs = select("#", ...)
+		for i = 1, numArgs do
+			local arg = select(i, ...)
+			if type(arg) == "boolean" or arg == nil then
+				printargs[i] = arg and "|cff00FFFFYes|r" or "|cff0011FFNo|r"
+			else
+				printargs[i] = tostring(arg)
+			end
+		end
+
+		print(self:GetName(), format:format(unpack(printargs, 1, numArgs)))
+	end
+end
 
 local ipairs, pairs = ipairs, pairs
 local Dominos_Frame = Dominos.Frame
 
-local FramesToHide = {}
-local FramesToShow = {}
-
--- Returns a match when a conditional string uses `fadein` with the [combat] conditional
-local CombatFadeInPattern = "[%[,]combat[%],]%[?[^;]*%]?fadein"
-
--- Sets that need to fade in in combat
-local NumCombatFadeInSets = 0
-local CombatFadeInSets = {}
-
 ------
--- Set methods
-------
-local function Set_ShowAll(self)
-	for groupID = 1, #self do
-		self[groupID]:ShowAll()
-	end
-end
-
-------
--- Group methods
-------
-local function Group_ShowAll(self)
-	for i = 1, #self do
-		Dominos_Frame:Get(self[i]):ShowFrame()
-	end
-end
-
-------
--- Group scripts
+-- Group timekeeper Animation scripts
 ------
 local function GroupFadeIn_OnPlay(self)
 	local group = self.group
 	for i = 1, #group do
 		local frame = Dominos_Frame:Get(group[i])
 		if frame then
-			frame:FadeIn(true)
+			frame:FadeIn(false, true)
 		end
 	end
 end
@@ -84,7 +74,7 @@ local function GroupFadeOut_OnPlay(self)
 	for i = 1, #group do
 		local frame = Dominos_Frame:Get(group[i])
 		if frame then
-			frame:FadeOut()
+			frame:FadeOut(false)
 		end
 	end
 end
@@ -92,50 +82,103 @@ end
 ------
 -- Frame methods
 ------
-local function Frame_Fade(self)
-	if self.fadeConditional then return end
-	
+local FrameMethods = {}
+
+-- Overrides the Dominos Frame:Fade() method. Called by the Dominos fade manager when the frame gains or loses mouse focus.
+function FrameMethods:Fade()
+	PRINT(self, "Frame:Fade() Conditional? %s. Focused? %s", self.conditionalFadeIn, self.focused)
+	-- If the most recent fade was a fade in triggered by a conditional update, ignore mouse focus
+	if self.conditionalFadeIn then return end
+
 	if self.focused then
-		self:FadeIn(false)
+		self:FadeIn(false, false)
 	else
-		self:FadeOut()
+		self:FadeOut(false)
 	end
 end
 
-local function Frame_FadeIn(self, fadeConditional)
-	self.fadeConditional = fadeConditional
-	self.fadeIn:Play()
+-- Fades in a frame.
+-- The conditionalFadeIn argument will be true for fades triggered by a conditional update and false for fades triggered by mouse focus.
+function FrameMethods:FadeIn(delay, conditionalFadeIn)
+	self.conditionalFadeIn = conditionalFadeIn
+
+	-- self.fadeIn.animation:SetStartDelay(delay and 0.001 or 0)
+
+	if self:IsFadingOut() then -- If the frame is currently fading out, fade in when it completes
+		PRINT(self, "|cffFF0000Queued fade in. Delay? %s|r", delay)
+		self.needsFadeIn = true
+	else -- Otherwise fade in now
+		PRINT(self, "Fade in started. Delay? %s", delay)
+		self.fadeIn:Play()
+	end
 end
 
-local function Frame_FadeOut(self)
-	self.fadeConditional = false
-	self.fadeOut:Play()
+-- Fades out a frame.
+function FrameMethods:FadeOut(delay)
+	self.conditionalFadeIn = nil
+
+	-- self.fadeOut.animation:SetStartDelay(delay and 0.001 or 0)
+
+	if self:IsFadingIn() then -- If the frame is currently fading in, fade out when it completes
+		PRINT(self, "|cffFF0000Queued fade out. Delay? %s|r", delay)
+		self.needsFadeOut = true
+	else -- Otherwise fade out now
+		PRINT(self, "Fade out started. Delay? %s", delay)
+		self.fadeOut:Play()
+	end
+end
+
+-- Is the frame fading in?
+function FrameMethods:IsFadingIn()
+	return self.fadeIn:IsPlaying()
+end
+
+-- Is the frame fading out?
+function FrameMethods:IsFadingOut()
+	return self.fadeOut:IsPlaying()
 end
 
 ------
--- Frame scripts
+-- Frame fader AnimationGroup scripts
 ------
 local function FrameFadeIn_OnPlay(self)
 	local frame = self:GetParent()
+	frame.needsFadeIn = false
+
+	PRINT(frame, "Fading in")
+
 	if not InCombatLockdown and not frame:FrameIsShown() then
 		frame:ShowFrame()
 	end
 end
 
 local function FrameFadeIn_OnFinished(self)
-	self:GetParent():SetAlpha(1)
+	local frame = self:GetParent()
+	frame:SetAlpha(1)
+
+	PRINT(frame, "Fade in complete. IsFadingIn? %s Needs fade out? %s", frame:IsFadingIn(), frame.needsFadeOut)
+
+	if frame.needsFadeOut then -- If we're waiting for a fade out, fade out now
+		frame:FadeOut(true)
+	end
+end
+
+local function FrameFadeOut_OnPlay(self)
+	local frame = self:GetParent()
+	frame.needsFadeOut = false
+
+	PRINT(frame, "Fading out")
 end
 
 local function FrameFadeOut_OnFinished(self)
 	local frame = self:GetParent()
 	frame:SetAlpha(0)
 
-	-- if InCombatLockdown() then
-		-- FramesToHide[frame] = true
-	-- else
-		-- FramesToShow[frame] = nil
-		-- frame:HideFrame()
-	-- end
+	PRINT(frame, "Fade out complete. IsFadingOut? %s Needs fade in? %s", frame:IsFadingOut(), frame.needsFadeIn)
+
+	if frame.needsFadeIn then -- If we're waiting for a fade in, fade in now
+		frame:FadeIn(true, true)
+	end
 end
 
 ------
@@ -164,8 +207,10 @@ local TimekeeperParent = CreateFrame("Frame")
 local FadeInTimekeepers = {}
 local FadeOutTimekeepers = {}
 
+TKP = TimekeeperParent
+
 TimekeeperParent:SetScript("OnAttributeChanged", function(self, name, value)
-	print("OAC", self, name, value)
+	print("OAC", name, value)
 	if value == "fadein" then
 		FadeInTimekeepers[name]:Play()
 	elseif value == "fadeout" then
@@ -179,36 +224,8 @@ function TimekeeperParent:ForceUpdate()
 	end
 end
 
-TimekeeperParent:RegisterEvent("PLAYER_REGEN_DISABLED")
-TimekeeperParent:RegisterEvent("PLAYER_REGEN_ENABLED")
-TimekeeperParent:SetScript("OnEvent", function(self, event, ...)
-	self[event](self, ...)
-end)
-
--- Pre-show all frames that need to fade in in combat just before it starts
-function TimekeeperParent:PLAYER_REGEN_DISABLED()
-	for i = 1, NumCombatFadeInSets do
-		CombatFadeInSets[i]:ShowAll()
-	end
-end
-
--- When combat ends, show/hide any frames that were meant to show/hide during combat
-function TimekeeperParent:PLAYER_REGEN_ENABLED()
-	for frame, _ in pairs(FramesToShow) do
-		frame:ShowFrame()
-		FramesToShow[frame] = nil
-	end
-
-	for frame, _ in pairs(FramesToHide) do
-		frame:HideFrame()
-		FramesToHide[frame] = nil
-	end
-end
-
 for setName, set in pairs(FRAME_SETS) do
 	setName = setName:lower()
-
-	set.ShowAll = Set_ShowAll
 
 	local FadeInTimekeeper = TimekeeperParent:CreateAnimationGroup()
 	FadeInTimekeeper.animations = {}
@@ -220,15 +237,8 @@ for setName, set in pairs(FRAME_SETS) do
 
 	RegisterAttributeDriver(TimekeeperParent, setName, set.conditional)
 
-	if set.conditional:find(CombatFadeInPattern) then
-		NumCombatFadeInSets = NumCombatFadeInSets + 1
-		CombatFadeInSets[NumCombatFadeInSets] = set
-	end
-
 	local numGroups = #set
 	for groupID, group in ipairs(set) do
-		group.ShowAll = Group_ShowAll
-
 		FadeInTimekeeper.animations[groupID] = CreateGroupFader(FadeInTimekeeper, groupID, group, GroupFadeIn_OnPlay)
 
 		-- Add 1 to the order argument so it's in the range [1,numGroups] instead of [0,numGroups-1]
@@ -242,10 +252,10 @@ hooksecurefunc(Dominos_Frame, "New", function(self, id)
 		frame.hasFadeInOut = true
 		frame.fadeIn = CreateFrameFader(frame, 1, FrameFadeIn_OnPlay, FrameFadeIn_OnFinished)
 		frame.fadeOut = CreateFrameFader(frame, -1, nil, FrameFadeOut_OnFinished)
-		
-		frame.Fade = Frame_Fade
-		frame.FadeIn = Frame_FadeIn
-		frame.FadeOut = Frame_FadeOut
+
+		for name, method in pairs(FrameMethods) do -- Copy all frame methods into the frame
+			frame[name] = method
+		end
 	end
 
 	TimekeeperParent:ForceUpdate()
